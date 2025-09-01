@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SSL Cert Dashboard</title>
+
+  <!-- Optional: when hosting frontend separately, set your function URL here:
+       <meta name="ssl-api" content="https://<your-function>.azurewebsites.net/api/get_cert">
+       OR set window.SSL_API_ENDPOINT = 'https://<your-function>.azurewebsites.net/api/get_cert'
+       before this script runs.
+  -->
+  <meta name="ssl-api" content="https://sslcert-checker.azurewebsites.net/api/get_cert">
+
+  <style>
+:root{ --bg:#f5f7fb; --card:#ffffff; --muted:#6b7280; --green:#10b981; --orange:#f59e0b; --red:#ef4444; --glass: rgba(255,255,255,0.6); }
+*{box-sizing:border-box} body{ margin:0; font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:var(--bg); color:#0f172a; -webkit-font-smoothing:antialiased; }
+.wrap{max-width:1100px;margin:28px auto;padding:20px;} header{display:flex;gap:12px;align-items:center;justify-content:space-between} .title{font-size:20px;font-weight:700} .subtitle{font-size:13px;color:var(--muted)} .controls{display:flex;gap:8px;align-items:center} input[type="text"]{ min-width:340px;padding:10px 12px;border-radius:10px;border:1px solid #e6eef8;background:#fff; box-shadow:none;outline:none;font-size:14px; } .btn{ background:linear-gradient(180deg,#0ea5a4,#0284c7);color:white;border:none;padding:10px 14px;border-radius:10px; font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s; } .btn:active{transform:translateY(1px)} .small{font-size:12px;padding:8px 10px;border-radius:8px;background:#fff;border:1px solid #e6eef8} .example-links{display:flex;gap:8px;align-items:center} .example-links a{font-size:12px;color:#0369a1;text-decoration:none} /* grid of cards */ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-top:18px} .card{ background:var(--card);border-radius:12px;padding:12px 14px;box-shadow:0 4px 14px rgba(16,24,40,0.04); transition:transform .18s,box-shadow .18s;border:1px solid rgba(2,6,23,0.03); display:flex;flex-direction:column;gap:8px;min-height:120px;position:relative;overflow:hidden; } .card:hover{transform:translateY(-8px);box-shadow:0 18px 40px rgba(2,6,23,0.09)} .card.placeholder{opacity:0.55;border-style:dashed;background:linear-gradient(180deg,#fbfdff,#ffffff)} .card h3{margin:0;font-size:15px;word-break:break-word} .card .meta{font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap} .badge{ padding:6px 8px;border-radius:999px;font-weight:700;font-size:12px;color:white;display:inline-block; } .badge.healthy{background:linear-gradient(90deg,#34d399,#059669)} .badge.warning{background:linear-gradient(90deg,#fbbf24,#f97316)} .badge.critical{background:linear-gradient(90deg,#fb7185,#ef4444)} .badge.unknown{background:#94a3b8} .row{display:flex;justify-content:space-between;align-items:center;gap:8px} .muted{color:var(--muted);font-size:13px} .copy-hint{font-size:11px;color:#94a3b8} .small-field{font-size:13px;color:#0f172a;font-weight:600} .error{color:#7f1d1d;font-weight:700;font-size:13px} footer{margin-top:18px;font-size:13px;color:var(--muted)} /* tooltip small toast after copy */ .toast{position:fixed;right:18px;bottom:18px;background:#0f172a;color:white;padding:10px 12px;border-radius:10px;opacity:0;transform:translateY(8px);transition:opacity .18s,transform .18s} .toast.show{opacity:1;transform:translateY(0)} /* small spinner */ .spinner{width:18px;height:18px;border-radius:50%;border:3px solid rgba(2,6,23,0.08);border-top-color:#0ea5a4;animation:spin 1s linear infinite;display:inline-block} @keyframes spin{to{transform:rotate(360deg)}} /* responsive tweaks */ @media (max-width:520px){ input[type="text"]{min-width:140px} header{flex-direction:column;align-items:flex-start;gap:10px} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <div class="title">SSL Certificate Dashboard</div>
+        <div class="subtitle">Paste domains (comma separated). Shows at least 10 result slots. Click a domain to copy.</div>
+      </div>
+      <div class="controls">
+        <input id="domains" type="text" placeholder="e.g. www.google.com, www.youtube.com" />
+        <button id="searchBtn" class="btn">Check</button>
+        <button id="clearBtn" class="small">Clear</button>
+      </div>
+    </header>
+
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div>API endpoint: <span id="apiHost" class="muted"></span></div>
+      <div style="margin-left:auto" class="example-links">
+        <a href="#" data-example="www.google.com,www.youtube.com">Example</a>
+        <a href="#" data-example="example.com">Single</a>
+      </div>
+    </div>
+
+    <div id="grid" class="grid" aria-live="polite"></div>
+
+    <footer>
+      Tip: open <code>?domain=www.google.com,www.youtube.com</code> to pre-run a search.
+    </footer>
+  </div>
+
+  <div id="toast" class="toast">Copied to clipboard</div>
+
+  <script>
+  (function(){
+    const MIN_SLOTS = 10;
+
+    // --- API endpoint selection logic ---
+    // Local testing host:
+    const DEFAULT_LOCAL = 'http://localhost:7071/api/get_cert';
+    // When deployed alongside your function (same origin), use the relative path:
+    const DEFAULT_RELATIVE = '/api/get_cert';
+
+    // Allow explicit override by meta tag <meta name="ssl-api" content="https://..."> or a global JS variable
+    const OVERRIDE_META = document.querySelector('meta[name="ssl-api"]')?.getAttribute('content');
+    const OVERRIDE_GLOBAL = window.SSL_API_ENDPOINT;
+
+    let API_BASE;
+    if (OVERRIDE_GLOBAL) {
+      API_BASE = OVERRIDE_GLOBAL;
+    } else if (OVERRIDE_META) {
+      API_BASE = OVERRIDE_META;
+    } else if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+      API_BASE = DEFAULT_LOCAL;
+    } else {
+      API_BASE = DEFAULT_RELATIVE;
+    }
+
+    // Display the API host (full URL if needed)
+    const apiHostEl = document.getElementById('apiHost');
+    apiHostEl.textContent = API_BASE.startsWith('http') ? API_BASE : (location.origin + API_BASE);
+
+    const domainsInput = document.getElementById('domains');
+    const searchBtn = document.getElementById('searchBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const grid = document.getElementById('grid');
+    const toast = document.getElementById('toast');
+
+    function showToast(msg='Copied!'){
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(()=> toast.classList.remove('show'), 1600);
+    }
+
+    function getStatus(days){
+      if(days === null || days === undefined || isNaN(days)) return 'unknown';
+      days = Number(days);
+      if(days <= 7) return 'critical';
+      if(days <= 28) return 'warning';
+      return 'healthy';
+    }
+
+    function createCard(data){
+      if(!data) {
+        const d = document.createElement('div');
+        d.className = 'card placeholder';
+        d.innerHTML = '<div style="height:14px;width:60%;background:#eef6ff;border-radius:6px"></div><div style="height:10px;width:40%;background:#f3f4f6;border-radius:6px;margin-top:10px"></div>';
+        return d;
+      }
+
+      const d = document.createElement('div');
+      d.className = 'card';
+      const status = getStatus(data.days_remaining);
+      const cn = data.cn || '—';
+      const ca = data.ca || '—';
+      const validFrom = data.valid_from || '—';
+      const validTo = data.valid_to || '—';
+      const days = (data.days_remaining === null || data.days_remaining === undefined) ? '—' : data.days_remaining;
+
+      d.innerHTML = `
+        <div class="row">
+          <h3 title="${escapeHtml(data.domain)}">${escapeHtml(data.domain)}</h3>
+          <span class="badge ${status}">${status === 'unknown' ? 'UNKNOWN' : status.toUpperCase()}</span>
+        </div>
+        <div class="meta"><div class="muted">CN</div><div class="small-field">${escapeHtml(cn)}</div></div>
+        <div class="meta"><div class="muted">Issuer</div><div class="small-field">${escapeHtml(ca)}</div></div>
+        <div class="meta"><div class="muted">Valid</div><div class="small-field">${escapeHtml(validFrom)} → ${escapeHtml(validTo)}</div></div>
+        <div class="row">
+          <div class="muted">Days remaining</div>
+          <div style="font-weight:800">${escapeHtml(String(days))}</div>
+        </div>
+        ${data.error ? `<div class="error">Error: ${escapeHtml(String(data.error))}</div>` : ''}
+        <div class="copy-hint" style="margin-top:6px">Click domain to copy</div>
+      `;
+
+      const h3 = d.querySelector('h3');
+      h3.style.cursor = 'pointer';
+      h3.addEventListener('click', async () => {
+        try{
+          await navigator.clipboard.writeText(data.domain);
+          showToast('Domain copied to clipboard');
+        }catch(e){
+          showToast('Cannot copy');
+        }
+      });
+
+      return d;
+    }
+
+    function escapeHtml(s){
+      if(s === null || s === undefined) return '';
+      return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+
+    function render(results){
+      grid.innerHTML = '';
+      const total = Math.max(MIN_SLOTS, (Array.isArray(results) ? results.length : 0));
+      for(let i=0;i<total;i++){
+        const item = (Array.isArray(results) && results[i]) ? results[i] : null;
+        grid.appendChild(createCard(item));
+      }
+    }
+
+    async function fetchCerts(domainParam){
+      if(!domainParam) return render([]);
+      const baseUrl = API_BASE.startsWith('http') ? API_BASE : (location.origin + API_BASE);
+      const url = baseUrl + '?domain=' + encodeURIComponent(domainParam);
+
+      // show interim placeholders
+      render([]);
+
+      // spinner
+      const prevText = searchBtn.innerHTML;
+      searchBtn.disabled = true;
+      searchBtn.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
+
+      try{
+        const res = await fetch(url, {method:'GET'});
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        const arr = Array.isArray(json) ? json : [json];
+        render(arr);
+      }catch(err){
+        render([{ domain: domainParam, cn:null, ca:null, valid_from:null, valid_to:null, days_remaining:null, error: err.message }]);
+      }finally{
+        searchBtn.disabled = false;
+        searchBtn.innerHTML = prevText;
+      }
+    }
+
+    // events
+    searchBtn.addEventListener('click', ()=> {
+      const val = domainsInput.value.trim();
+      fetchCerts(val);
+      const url = new URL(location.href);
+      if(val) url.searchParams.set('domain', val); else url.searchParams.delete('domain');
+      history.replaceState({},'',url.toString());
+    });
+
+    clearBtn.addEventListener('click', ()=> {
+      domainsInput.value = '';
+      render([]);
+      const url = new URL(location.href);
+      url.searchParams.delete('domain');
+      history.replaceState({},'',url.toString());
+    });
+
+    document.querySelectorAll('[data-example]').forEach(a=>{
+      a.addEventListener('click', (ev)=> {
+        ev.preventDefault();
+        const v = a.getAttribute('data-example');
+        domainsInput.value = v;
+        searchBtn.click();
+      });
+    });
+
+    // on load: if ?domain=... run search
+    (function initFromUrl(){
+      const params = new URLSearchParams(location.search);
+      const d = params.get('domain');
+      if(d){
+        domainsInput.value = d;
+        fetchCerts(d);
+      } else {
+        render([]);
+      }
+    })();
+
+  })();
+  </script>
+</body>
+</html>
